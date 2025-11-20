@@ -13,3 +13,7 @@ IBKR_CLIENT_ID = 1  # Unique client ID (each connection needs unique ID)
 PICKLE_DIR = os.path.join(os.path.dirname(__file__), "data", "pickle")  # Directory for cached data
 HISTORICAL_YEARS = 5  # Default years of historical data to fetch
 
+# Data Type Settings
+# Options: "ADJUSTED_LAST" (adjusted close), "TRADES" (unadjusted), "MIDPOINT", "BID", "ASK"
+WHAT_TO_SHOW = "ADJUSTED_LAST"  # Use "ADJUSTED_LAST" for adjusted close data
+

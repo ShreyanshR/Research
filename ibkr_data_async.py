@@ -6,7 +6,7 @@ import pandas as pd
 import os
 import logging
 
-from config import PICKLE_DIR, HISTORICAL_YEARS, IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID
+from config import PICKLE_DIR, HISTORICAL_YEARS, IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID, WHAT_TO_SHOW
 from pickle_utils import load_pickle, save_pickle
 
 class DataFetcherAsync:
@@ -26,7 +26,7 @@ class DataFetcherAsync:
         await self.ib.connectAsync(self.host, self.port, clientId=self.client_id)
         self.logger.info("Connected to IBKR (async mode).")
 
-    async def fetch_ticker_data(self, ticker: str, years: int = HISTORICAL_YEARS, force_refresh: bool = False) -> Optional[pd.DataFrame]:
+    async def fetch_ticker_data(self, ticker: str, years: int = HISTORICAL_YEARS, force_refresh: bool = False, what_to_show: str = WHAT_TO_SHOW) -> Optional[pd.DataFrame]:
         pickle_path = os.path.join(self.pickle_dir, f"{ticker}.xz")
         if not force_refresh and os.path.exists(pickle_path):
             try:
@@ -49,7 +49,7 @@ class DataFetcherAsync:
                     endDateTime="",  # Use empty string for latest data (fixes Error 321)
                     durationStr=duration,
                     barSizeSetting="1 day",
-                    whatToShow="ADJUSTED_LAST",
+                    whatToShow=what_to_show,  # Use ADJUSTED_LAST for adjusted close
                     useRTH=True,
                     formatDate=1,
                     keepUpToDate=False
@@ -69,7 +69,7 @@ class DataFetcherAsync:
         self.logger.error(f"{ticker}: All contract attempts failed.")
         return None
 
-    async def fetch_all_tickers_data(self, tickers: List[str], years: int = HISTORICAL_YEARS, force_refresh: bool = False, max_concurrent: int = 5) -> Dict[str, pd.DataFrame]:
+    async def fetch_all_tickers_data(self, tickers: List[str], years: int = HISTORICAL_YEARS, force_refresh: bool = False, max_concurrent: int = 5, what_to_show: str = WHAT_TO_SHOW) -> Dict[str, pd.DataFrame]:
         """
         Fetch historical data for all tickers using asyncio.gather, with a concurrency limit.
         
@@ -78,6 +78,7 @@ class DataFetcherAsync:
             years: Number of years of historical data to fetch
             force_refresh: If True, bypass cache and re-download data
             max_concurrent: Maximum number of concurrent requests
+            what_to_show: Type of data to fetch (e.g., "ADJUSTED_LAST" for adjusted close)
             
         Returns:
             Dictionary mapping ticker symbols to DataFrames
@@ -86,7 +87,7 @@ class DataFetcherAsync:
         sem = asyncio.Semaphore(max_concurrent)
         async def sem_task(ticker):
             async with sem:
-                return ticker, await self.fetch_ticker_data(ticker, years=years, force_refresh=force_refresh)
+                return ticker, await self.fetch_ticker_data(ticker, years=years, force_refresh=force_refresh, what_to_show=what_to_show)
         tasks = [sem_task(ticker) for ticker in tickers]
         for coro in asyncio.as_completed(tasks):
             ticker, df = await coro
