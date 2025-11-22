@@ -11,6 +11,7 @@ IBKR_CLIENT_ID = 1  # Unique client ID (each connection needs unique ID)
 
 # Data Settings
 PICKLE_DIR = os.path.join(os.path.dirname(__file__), "data", "pickle")  # Directory for cached data
+EXCEL_DIR = os.path.join(os.path.dirname(__file__), "data", "excel")  # Directory for Excel files
 HISTORICAL_YEARS = 5  # Default years of historical data to fetch
 
 # Data Type Settings
