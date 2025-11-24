@@ -36,36 +36,81 @@ class DataFetcherAsync:
                 return df
             except Exception as e:
                 self.logger.warning(f"{ticker}: Cache load failed, re-downloading. Error: {e}", exc_info=True)
-        # Special handling for index: try both SPX and SPY
-        if ticker.upper() == "SPX":
+        # Special handling for specific tickers that need explicit exchange specification
+        ticker_upper = ticker.upper()
+        if ticker_upper == "SPX":
             contracts = [Stock("SPX", "CBOE", "USD"), Stock("SPX", "SMART", "USD"), Stock("SPY", "ARCA", "USD")]
+        elif ticker_upper == "TLT":
+            # TLT is an ETF on ARCA - try ARCA first, then SMART as fallback
+            contracts = [Stock("TLT", "ARCA", "USD"), Stock("TLT", "SMART", "USD")]
         else:
             contracts = [Stock(ticker, 'SMART', 'USD')]
+        
+        # Try different data types if ADJUSTED_LAST doesn't return enough data
+        data_types_to_try = [what_to_show]
+        if what_to_show == "ADJUSTED_LAST":
+            # If ADJUSTED_LAST fails or returns limited data, try TRADES as fallback
+            data_types_to_try.append("TRADES")
+        
+        best_df = None
+        best_date_range = None
+        best_data_type = None
+        
         for contract in contracts:
-            try:
-                duration = f"{years} Y"
-                bars = await self.ib.reqHistoricalDataAsync(
-                    contract,
-                    endDateTime="",  # Use empty string for latest data (fixes Error 321)
-                    durationStr=duration,
-                    barSizeSetting="1 day",
-                    whatToShow=what_to_show,  # Use ADJUSTED_LAST for adjusted close
-                    useRTH=True,
-                    formatDate=1,
-                    keepUpToDate=False
-                )
-                if bars is None:
-                    self.logger.warning(f"{ticker}: No bars returned from {contract.symbol} {contract.exchange}.")
-                    continue
-                df = util.df(bars)
-                if df is not None and not df.empty:
-                    save_pickle(pickle_path, df)
-                    self.logger.info(f"{ticker}: Downloaded and cached from {contract.symbol} {contract.exchange}. Data shape {df.shape}")
-                    return df
-                else:
-                    self.logger.warning(f"{ticker}: No data returned from {contract.symbol} {contract.exchange}.")
-            except Exception as e:
-                self.logger.error(f"{ticker}: Failed to fetch from {contract.symbol} {contract.exchange}. Error: {e}", exc_info=True)
+            for data_type in data_types_to_try:
+                try:
+                    duration = f"{years} Y"
+                    bars = await self.ib.reqHistoricalDataAsync(
+                        contract,
+                        endDateTime="",  # Use empty string for latest data (fixes Error 321)
+                        durationStr=duration,
+                        barSizeSetting="1 day",
+                        whatToShow=data_type,
+                        useRTH=True,
+                        formatDate=1,
+                        keepUpToDate=False
+                    )
+                    if bars is None:
+                        self.logger.warning(f"{ticker}: No bars returned from {contract.symbol} {contract.exchange} with {data_type}.")
+                        continue
+                    df = util.df(bars)
+                    if df is not None and not df.empty:
+                        # Check if this gives us a better date range
+                        if 'date' in df.columns:
+                            df['date'] = pd.to_datetime(df['date'])
+                            date_min = df['date'].min()
+                            date_max = df['date'].max()
+                        else:
+                            date_min = df.index.min() if hasattr(df.index, 'min') else None
+                            date_max = df.index.max() if hasattr(df.index, 'max') else None
+                        
+                        # Keep the DataFrame with the earliest start date (most historical data)
+                        # Prefer ADJUSTED_LAST when date ranges are equal
+                        should_update = False
+                        if best_df is None:
+                            should_update = True
+                        elif date_min is not None:
+                            if best_date_range is None:
+                                should_update = True
+                            elif date_min < best_date_range:
+                                should_update = True
+                            elif date_min == best_date_range and data_type == "ADJUSTED_LAST" and best_data_type != "ADJUSTED_LAST":
+                                # Prefer ADJUSTED_LAST when date ranges are equal
+                                should_update = True
+                        
+                        if should_update:
+                            best_df = df
+                            best_date_range = date_min
+                            best_data_type = data_type
+                            self.logger.info(f"{ticker}: Found data from {contract.symbol} {contract.exchange} with {data_type}. Date range: {date_min} to {date_max}, Shape: {df.shape}")
+                except Exception as e:
+                    self.logger.error(f"{ticker}: Failed to fetch from {contract.symbol} {contract.exchange} with {data_type}. Error: {e}", exc_info=True)
+        
+        if best_df is not None and not best_df.empty:
+            save_pickle(pickle_path, best_df)
+            self.logger.info(f"{ticker}: Downloaded and cached. Final data shape {best_df.shape}")
+            return best_df
+        
         self.logger.error(f"{ticker}: All contract attempts failed.")
         return None
 
