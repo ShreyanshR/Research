@@ -119,10 +119,19 @@ class Data:
                 df['log_returns'] = np.log(df['close']).diff()
             
             # Add calendar features
-            df['day_of_month'] = df.index.day
-            df['day_of_week'] = df.index.dayofweek
-            df['month'] = df.index.month
-            df['year'] = df.index.year
+            # Ensure index is DatetimeIndex before accessing .day
+            if isinstance(df.index, pd.DatetimeIndex):
+                df['day_of_month'] = df.index.day
+                df['day_of_week'] = df.index.dayofweek
+                df['month'] = df.index.month
+                df['year'] = df.index.year
+            else:
+                # Fallback: convert to datetime if needed
+                df.index = pd.to_datetime(df.index)
+                df['day_of_month'] = df.index.day
+                df['day_of_week'] = df.index.dayofweek
+                df['month'] = df.index.month
+                df['year'] = df.index.year
             
             # Store cleaned dataframe
             cleaned_dfs[ticker] = df
