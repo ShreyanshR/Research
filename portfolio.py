@@ -4,4 +4,5 @@ from assets import Position, AssetClass
 class Portfolio:
     positions: List[Position]
     target_vol: float
-    MAX_INTERPO
+    max_leverage: float
+    target_leverage: float
