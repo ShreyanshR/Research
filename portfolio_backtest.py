@@ -71,7 +71,7 @@ class SimplePortfolio:
         self.returns: Optional[pd.DataFrame] = None
         self.portfolio_returns: Optional[pd.Series] = None
         
-    def load_data(self, tickers: Optional[List[str]] = None, force_refresh: bool = False) -> None:
+    async def load_data(self, tickers: Optional[List[str]] = None, force_refresh: bool = False) -> None:
         """
         Load price data for all tickers in allocations.
         Automatically downloads missing data and updates old data if auto_download is True.
@@ -95,14 +95,12 @@ class SimplePortfolio:
         # Use simple function to ensure all tickers have data
         from pickle_utils import ensure_all_tickers_data
         print(f"Ensuring all tickers have data...")
-        self.data = asyncio.run(
-            ensure_all_tickers_data(
-                tickers=tickers,
-                years=years_needed,
-                force_refresh=force_refresh,
-                update_if_old=self.auto_download,  # Only update if auto_download is enabled
-                auto_download=self.auto_download  # Only download if auto_download is enabled
-            )
+        self.data = await ensure_all_tickers_data(
+            tickers=tickers,
+            years=years_needed,
+            force_refresh=force_refresh,
+            update_if_old=self.auto_download,  # Only update if auto_download is enabled
+            auto_download=self.auto_download  # Only download if auto_download is enabled
         )
         
         # Filter data to backtest period
@@ -388,7 +386,8 @@ def create_target_portfolio() -> List[PortfolioAllocation]:
     return allocations
 
 
-if __name__ == "__main__":
+async def main():
+    """Main function for running backtest."""
     # Create your target portfolio
     print("Creating portfolio allocation...")
     allocations = create_target_portfolio()
@@ -403,7 +402,7 @@ if __name__ == "__main__":
     )
     
     # Load data (will auto-download missing tickers)
-    portfolio.load_data()
+    await portfolio.load_data()
     
     # Run backtest
     print("\nRunning backtest...")
@@ -411,3 +410,7 @@ if __name__ == "__main__":
     
     # Print results
     portfolio.print_summary()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
