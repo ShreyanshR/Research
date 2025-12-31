@@ -8,6 +8,10 @@ from typing import List, Dict, Optional
 from datetime import date, timedelta
 import asyncio
 import pandas as pd
+import nest_asyncio
+
+# Allow nested event loops for Streamlit
+nest_asyncio.apply()
 
 from portfolio_manager import PortfolioManager
 from portfolio_visualizer import ChartGenerator, MetricsDisplay
