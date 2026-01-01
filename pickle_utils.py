@@ -111,7 +111,7 @@ async def ensure_all_tickers_data(
     Returns:
         Dictionary of {ticker: DataFrame}
     """
-    from config import PICKLE_DIR, IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID
+    from config import PICKLE_DIR, IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID_DATA
     from ibkr_data_async import DataFetcherAsync
     from datetime import datetime, timedelta
     
@@ -150,7 +150,7 @@ async def ensure_all_tickers_data(
         fetcher = DataFetcherAsync(
             host=IBKR_HOST,
             port=IBKR_PORT,
-            client_id=IBKR_CLIENT_ID
+            client_id=IBKR_CLIENT_ID_DATA
         )
         try:
             await fetcher.connect()

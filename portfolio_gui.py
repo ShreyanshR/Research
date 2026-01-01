@@ -156,13 +156,36 @@ class PortfolioGUI:
             metrics: PortfolioMetrics object
         """
         formatted = MetricsDisplay.format_metrics(metrics)
+        initial_capital = st.session_state.get('config', {}).get('initial_capital', 100000.0)
         
-        col1, col2, col3, col4, col5 = st.columns(5)
-        cols = [col1, col2, col3, col4, col5]
+        # Calculate final capital
+        final_capital = initial_capital * (1 + metrics.total_return)
+        capital_change = final_capital - initial_capital
         
-        for i, (label, value) in enumerate(list(formatted.items())[:5]):
-            with cols[i]:
-                st.metric(label, value)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        cols = [col1, col2, col3, col4, col5, col6]
+        
+        # Show initial and final capital first
+        with cols[0]:
+            st.metric("Initial Capital", f"${initial_capital:,.2f}")
+        with cols[1]:
+            st.metric("Final Capital", f"${final_capital:,.2f}", delta=f"${capital_change:,.2f}")
+        
+        # Then show other metrics (including Max Drawdown)
+        metrics_to_show = ['Total Return', 'Annualized Return', 'Sharpe Ratio', 'Max Drawdown']
+        for i, label in enumerate(metrics_to_show):
+            if label in formatted:
+                with cols[i + 2]:
+                    st.metric(label, formatted[label])
+        
+        # Second row for remaining metrics
+        if len(formatted) > len(metrics_to_show) + 2:  # +2 for Initial/Final Capital
+            st.write("")  # Spacing
+            col1, col2, col3, col4 = st.columns(4)
+            remaining_metrics = [k for k in formatted.keys() if k not in metrics_to_show]
+            for i, label in enumerate(remaining_metrics[:4]):
+                with [col1, col2, col3, col4][i]:
+                    st.metric(label, formatted[label])
     
     def render_charts(self) -> None:
         """Render portfolio charts."""
@@ -170,7 +193,8 @@ class PortfolioGUI:
             return
         
         portfolio_cumulative, individual_cumulative = self.manager.get_returns_data()
-        positions = self.manager.get_positions()
+        initial_capital = st.session_state.get('config', {}).get('initial_capital', 100000.0)
+        positions = self.manager.get_positions(initial_capital=initial_capital)
         metrics = self.manager.get_metrics()
         
         # Cumulative returns - full width for larger display
@@ -183,7 +207,7 @@ class PortfolioGUI:
             metrics.leverage,
             initial_capital=initial_capital
         )
-        st.plotly_chart(fig_returns, use_container_width=True)
+        st.plotly_chart(fig_returns, use_container_width=True, key="backtest_returns_chart")
         
         # Allocation and Equity Curve side by side
         col1, col2 = st.columns([1, 2])  # Allocation smaller, equity curve larger
@@ -191,21 +215,131 @@ class PortfolioGUI:
         with col1:
             st.subheader("Portfolio Allocation")
             fig_allocation = ChartGenerator.create_allocation_chart(positions)
-            st.plotly_chart(fig_allocation, use_container_width=True)
+            st.plotly_chart(fig_allocation, use_container_width=True, key="backtest_allocation_chart")
         
         with col2:
             st.subheader("Portfolio Equity Curve")
+            initial_capital = st.session_state.get('config', {}).get('initial_capital', 100000.0)
             fig_equity = ChartGenerator.create_equity_curve(
-                self.manager.analyzer.portfolio_returns
+                self.manager.analyzer.portfolio_returns,
+                initial_capital=initial_capital
             )
-            st.plotly_chart(fig_equity, use_container_width=True)
+            st.plotly_chart(fig_equity, use_container_width=True, key="backtest_equity_chart")
+        
+        # Correlation matrix (basic - full period)
+        st.subheader("Correlation Matrix (Full Period)")
+        returns_df = self.manager.analyzer.returns_df
+        fig_corr = ChartGenerator.create_correlation_matrix(returns_df)
+        st.plotly_chart(fig_corr, use_container_width=True, key="backtest_correlation_chart")
+        
+        # Data timeline info
+        st.subheader("Data Timeline")
+        
+        # Get requested date range from config
+        config = st.session_state.get('config', {})
+        requested_start = config.get('start_date', None)
+        requested_end = config.get('end_date', None)
+        requested_years = config.get('years', 5)
+        
+        actual_start = returns_df.index[0].date()
+        actual_end = returns_df.index[-1].date()
+        actual_days = (actual_end - actual_start).days
+        actual_years = actual_days / 365.25
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Start Date", actual_start.strftime('%Y-%m-%d'))
+        with col2:
+            st.metric("End Date", actual_end.strftime('%Y-%m-%d'))
+        with col3:
+            st.metric("Total Days", f"{actual_days}")
+        
+        # Show warning if requested range doesn't match available data
+        if requested_start and actual_start > requested_start:
+            days_diff = (actual_start - requested_start).days
+            st.warning(
+                f"⚠️ **Data Availability Warning:**\n\n"
+                f"Requested: {requested_start} to {requested_end} ({requested_years} years)\n\n"
+                f"Available: {actual_start} to {actual_end} ({actual_years:.1f} years)\n\n"
+                f"**Missing {days_diff} days** of data at the start. "
+                f"This is likely because one or more tickers only have data from {actual_start}. "
+                f"Check the individual ticker date ranges below to see which ticker is limiting the range."
+            )
+        
+        # Show date range for each ticker (before alignment)
+        with st.expander("📅 Individual Ticker Date Ranges (Before Alignment)"):
+            timeline_data = []
+            if self.manager and self.manager.data:
+                for ticker, df in self.manager.data.items():
+                    if df.empty:
+                        continue
+                    # Get the actual data range from raw data
+                    if isinstance(df.index, pd.DatetimeIndex):
+                        ticker_start = df.index.min().date()
+                        ticker_end = df.index.max().date()
+                        ticker_days = len(df)
+                    else:
+                        ticker_start = "N/A"
+                        ticker_end = "N/A"
+                        ticker_days = len(df)
+                    
+                    # Get the range after filtering (in returns_df)
+                    if ticker in returns_df.columns:
+                        ticker_returns = returns_df[ticker].dropna()
+                        if len(ticker_returns) > 0:
+                            filtered_start = ticker_returns.index[0].date()
+                            filtered_end = ticker_returns.index[-1].date()
+                            filtered_days = len(ticker_returns)
+                        else:
+                            filtered_start = "N/A"
+                            filtered_end = "N/A"
+                            filtered_days = 0
+                    else:
+                        filtered_start = "N/A"
+                        filtered_end = "N/A"
+                        filtered_days = 0
+                    
+                    timeline_data.append({
+                        'Ticker': ticker,
+                        'Raw Data Start': str(ticker_start),
+                        'Raw Data End': str(ticker_end),
+                        'Raw Data Days': ticker_days,
+                        'After Filter Start': str(filtered_start),
+                        'After Filter End': str(filtered_end),
+                        'After Filter Days': filtered_days
+                    })
+            
+            if timeline_data:
+                df_timeline = pd.DataFrame(timeline_data)
+                st.dataframe(df_timeline, use_container_width=True, hide_index=True)
+                
+                # Highlight which ticker is limiting the range
+                if len(timeline_data) > 1:
+                    # Find the ticker with the latest start date (after filter)
+                    latest_start_ticker = None
+                    latest_start_date = None
+                    for item in timeline_data:
+                        if item['After Filter Start'] != 'N/A':
+                            try:
+                                start_date = pd.to_datetime(item['After Filter Start']).date()
+                                if latest_start_date is None or start_date > latest_start_date:
+                                    latest_start_date = start_date
+                                    latest_start_ticker = item['Ticker']
+                            except:
+                                pass
+                    
+                    if latest_start_ticker and latest_start_date == actual_start:
+                        st.info(f"🔍 **Limiting Ticker:** `{latest_start_ticker}` has the latest start date ({actual_start}), which limits the portfolio's date range.")
+            else:
+                st.info("No date range data available")
     
     def render_positions_table(self) -> None:
         """Render positions table."""
         if self.manager is None or self.manager.analyzer is None:
             return
         
-        positions = self.manager.get_positions()
+        initial_capital = st.session_state.get('config', {}).get('initial_capital', 100000.0)
+        positions = self.manager.get_positions(initial_capital=initial_capital)
         df_positions = MetricsDisplay.format_positions(positions)
         
         st.subheader("Position Details")
@@ -245,18 +379,26 @@ class PortfolioGUI:
         
         live_manager = st.session_state['live_manager']
         
-        col1, col2 = st.columns([1, 4])
+        col1, col2, col3 = st.columns([1, 1, 3])
         with col1:
             if st.button("🔄 Refresh Positions", type="primary"):
                 st.session_state['live_refresh'] = True
+        with col2:
+            if live_manager.connected:
+                if st.button("🔌 Disconnect"):
+                    with st.spinner("Disconnecting..."):
+                        asyncio.run(live_manager.disconnect())
+                    st.success("Disconnected from IBKR")
+                    st.rerun()
         
         # Account selection
         if not live_manager.connected:
-            if st.button("Connect to IBKR"):
+            if st.button("Connect to IBKR", type="primary"):
                 with st.spinner("Connecting to IBKR..."):
                     success = asyncio.run(live_manager.connect())
                     if success:
                         st.success("Connected to IBKR!")
+                        st.rerun()
                     else:
                         st.error("Failed to connect. Make sure TWS/IB Gateway is running.")
         
@@ -384,7 +526,7 @@ class PortfolioGUI:
             for pos in positions
         ]
         fig_allocation = ChartGenerator.create_allocation_chart(chart_positions)
-        st.plotly_chart(fig_allocation, use_container_width=True)
+        st.plotly_chart(fig_allocation, use_container_width=True, key="live_allocation_chart")
     
     def run(self) -> None:
         """Main GUI execution loop."""
@@ -422,7 +564,7 @@ class PortfolioGUI:
                     st.session_state['portfolio_loaded'] = False
         
         # Create tabs
-        tab1, tab2 = st.tabs(["📊 Backtest Analysis", "💰 Live Portfolio"])
+        tab1, tab2, tab3 = st.tabs(["📊 Backtest Analysis", "🔗 Correlation Builder", "💰 Live Portfolio"])
         
         with tab1:
             # Main content - Backtest Analysis
@@ -437,8 +579,104 @@ class PortfolioGUI:
                 self.render_leverage_analysis()
         
         with tab2:
+            # Correlation Builder Tab
+            if not st.session_state.get('portfolio_loaded', False) or self.manager is None:
+                st.info("👈 Configure your portfolio in the sidebar and click 'Load Data' first")
+            else:
+                self.render_correlation_builder()
+        
+        with tab3:
             # Live Portfolio Tab
             self.render_live_portfolio()
+    
+    def render_correlation_builder(self) -> None:
+        """Render correlation builder with adjustable lookback period."""
+        if self.manager is None or self.manager.analyzer is None:
+            return
+        
+        st.header("🔗 Correlation Builder")
+        st.write("Analyze correlation between portfolio positions with adjustable time periods.")
+        
+        returns_df = self.manager.analyzer.returns_df
+        
+        # Controls
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            max_days = len(returns_df)
+            use_lookback = st.checkbox("Use lookback period", value=False)
+        with col2:
+            if use_lookback:
+                lookback_days = st.slider(
+                    "Lookback days",
+                    min_value=30,
+                    max_value=max_days,
+                    value=min(252, max_days),  # Default to 1 year or max available
+                    step=1,
+                    help="Number of trading days to use for correlation calculation"
+                )
+            else:
+                lookback_days = None
+        with col3:
+            if use_lookback:
+                st.metric("Period", f"{lookback_days} days ({lookback_days/252:.1f} years)")
+            else:
+                total_days = len(returns_df)
+                st.metric("Period", f"{total_days} days ({total_days/252:.1f} years)")
+        
+        # Correlation matrix
+        st.subheader("Correlation Matrix")
+        fig_corr = ChartGenerator.create_correlation_matrix(returns_df, lookback_days=lookback_days)
+        # Use lookback_days in key to make it unique when slider changes
+        key_suffix = f"_{lookback_days}" if lookback_days else "_full"
+        st.plotly_chart(fig_corr, use_container_width=True, key=f"correlation_builder_chart{key_suffix}")
+        
+        # Correlation statistics
+        st.subheader("Correlation Statistics")
+        
+        if lookback_days is not None:
+            corr_data = returns_df.tail(lookback_days).corr()
+        else:
+            corr_data = returns_df.corr()
+        
+        # Get upper triangle (avoid duplicates)
+        import numpy as np
+        mask = np.triu(np.ones_like(corr_data, dtype=bool), k=1)
+        corr_values = corr_data.where(mask).stack()
+        corr_values = corr_data.where(mask).stack()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Average Correlation", f"{corr_values.mean():.3f}")
+        with col2:
+            st.metric("Min Correlation", f"{corr_values.min():.3f}")
+        with col3:
+            st.metric("Max Correlation", f"{corr_values.max():.3f}")
+        with col4:
+            st.metric("Std Deviation", f"{corr_values.std():.3f}")
+        
+        # Detailed correlation table
+        with st.expander("📋 Detailed Correlation Table"):
+            st.dataframe(corr_data, use_container_width=True)
+        
+        # Pairwise correlations
+        st.subheader("Pairwise Correlations")
+        pairs_data = []
+        for i, ticker1 in enumerate(corr_data.columns):
+            for j, ticker2 in enumerate(corr_data.columns):
+                if i < j:  # Only upper triangle
+                    corr_value = corr_data.loc[ticker1, ticker2]
+                    pairs_data.append({
+                        'Ticker 1': ticker1,
+                        'Ticker 2': ticker2,
+                        'Correlation': corr_value
+                    })
+        
+        if pairs_data:
+            pairs_df = pd.DataFrame(pairs_data)
+            pairs_df = pairs_df.sort_values('Correlation', ascending=False)
+            # Format correlation for display
+            pairs_df['Correlation'] = pairs_df['Correlation'].apply(lambda x: f"{x:.3f}")
+            st.dataframe(pairs_df, use_container_width=True, hide_index=True)
 
 
 def main():

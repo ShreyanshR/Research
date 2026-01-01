@@ -1,5 +1,5 @@
 import asyncio
-from ib_insync import IB, Stock, util
+from ib_insync import IB, Stock, Crypto, util
 from typing import List, Dict, Optional
 from datetime import datetime
 import pandas as pd
@@ -27,24 +27,45 @@ class DataFetcherAsync:
         self.logger.info("Connected to IBKR (async mode).")
 
     async def fetch_ticker_data(self, ticker: str, years: int = HISTORICAL_YEARS, force_refresh: bool = False, what_to_show: str = WHAT_TO_SHOW) -> Optional[pd.DataFrame]:
-        pickle_path = os.path.join(self.pickle_dir, f"{ticker}.xz")
+        # Normalize ticker name for pickle file (remove exchange specification)
+        # Support ticker format: "TICKER:EXCHANGE" or "TICKER@EXCHANGE" for custom exchange
+        ticker_upper = ticker.upper()
+        base_ticker = ticker_upper
+        exchange_override = None
+        if ':' in ticker_upper or '@' in ticker_upper:
+            separator = ':' if ':' in ticker_upper else '@'
+            parts = ticker_upper.split(separator, 1)
+            base_ticker = parts[0].strip()
+            exchange_override = parts[1].strip()
+        
+        # Use base ticker for pickle file name (so "BTC:PAXOS" and "BTC" use same cache)
+        pickle_path = os.path.join(self.pickle_dir, f"{base_ticker}.xz")
         if not force_refresh and os.path.exists(pickle_path):
             try:
-                self.logger.info(f"{ticker}: Loaded from cache.")
+                self.logger.info(f"{ticker} (base: {base_ticker}): Loaded from cache.")
                 df = load_pickle(pickle_path)
                 self.logger.info(f"{ticker}: Data shape {df.shape if df is not None else None}")
                 return df
             except Exception as e:
                 self.logger.warning(f"{ticker}: Cache load failed, re-downloading. Error: {e}", exc_info=True)
-        # Special handling for specific tickers that need explicit exchange specification
-        ticker_upper = ticker.upper()
-        if ticker_upper == "SPX":
+        
+        if base_ticker == "BTC" or base_ticker.startswith("BTC"):
+            # Bitcoin is a cryptocurrency, use Crypto contract type
+            # Try PAXOS first (most common), then ZEROHASH as fallback
+            if exchange_override:
+                contracts = [Crypto(base_ticker, exchange_override, "USD")]
+            else:
+                contracts = [Crypto("BTC", "PAXOS", "USD"), Crypto("BTC", "ZEROHASH", "USD")]
+        elif base_ticker == "SPX":
             contracts = [Stock("SPX", "CBOE", "USD"), Stock("SPX", "SMART", "USD"), Stock("SPY", "ARCA", "USD")]
-        elif ticker_upper == "TLT":
+        elif base_ticker == "TLT":
             # TLT is an ETF on ARCA - try ARCA first, then SMART as fallback
             contracts = [Stock("TLT", "ARCA", "USD"), Stock("TLT", "SMART", "USD")]
+        elif exchange_override:
+            # User specified custom exchange
+            contracts = [Stock(base_ticker, exchange_override, "USD")]
         else:
-            contracts = [Stock(ticker, 'SMART', 'USD')]
+            contracts = [Stock(base_ticker, 'SMART', 'USD')]
         
         # Try different data types if ADJUSTED_LAST doesn't return enough data
         data_types_to_try = [what_to_show]
@@ -108,7 +129,7 @@ class DataFetcherAsync:
         
         if best_df is not None and not best_df.empty:
             save_pickle(pickle_path, best_df)
-            self.logger.info(f"{ticker}: Downloaded and cached. Final data shape {best_df.shape}")
+            self.logger.info(f"{ticker} (base: {base_ticker}): Downloaded and cached. Final data shape {best_df.shape}")
             return best_df
         
         self.logger.error(f"{ticker}: All contract attempts failed.")

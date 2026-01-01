@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 from ib_insync import IB
 import pandas as pd
-from config import IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID
+from config import IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID_LIVE
 
 
 @dataclass
@@ -52,8 +52,12 @@ class LivePortfolioManager:
             True if successful, False otherwise
         """
         try:
+            # Disconnect if already connected
+            if self.connected and self.ib and self.ib.isConnected():
+                self.ib.disconnect()
+            
             self.ib = IB()
-            await self.ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
+            await self.ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID_LIVE)
             self.connected = True
             return True
         except Exception as e:
@@ -63,9 +67,15 @@ class LivePortfolioManager:
     
     async def disconnect(self) -> None:
         """Disconnect from IBKR."""
-        if self.ib and self.ib.isConnected():
-            self.ib.disconnect()
+        try:
+            if self.ib and self.ib.isConnected():
+                self.ib.disconnect()
             self.connected = False
+            self.ib = None
+        except Exception as e:
+            print(f"Error disconnecting: {e}")
+            self.connected = False
+            self.ib = None
     
     async def get_account_summary(self, account: Optional[str] = None) -> Optional[AccountSummary]:
         """

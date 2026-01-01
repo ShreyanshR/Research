@@ -86,7 +86,8 @@ class ReturnsCalculator:
     def calculate_returns(
         data: Dict[str, pd.DataFrame],
         start_date: Optional[date] = None,
-        end_date: Optional[date] = None
+        end_date: Optional[date] = None,
+        show_debug: bool = False
     ) -> pd.DataFrame:
         """
         Calculate returns for all tickers and align to common dates.
@@ -95,19 +96,27 @@ class ReturnsCalculator:
             data: Dictionary of ticker to DataFrame
             start_date: Optional start date filter
             end_date: Optional end date filter
+            show_debug: If True, print debug info about date ranges
             
         Returns:
             DataFrame with aligned returns
         """
         returns_dict = {}
         
+        if show_debug:
+            print(f"\nCalculating returns with date filter: {start_date} to {end_date}")
+        
         for ticker, df in data.items():
             if df.empty:
+                if show_debug:
+                    print(f"  {ticker}: DataFrame is empty")
                 continue
             
             # Find price column
             price_col = ReturnsCalculator._find_price_column(df, ticker)
             if price_col is None:
+                if show_debug:
+                    print(f"  {ticker}: No price column found")
                 continue
             
             # Normalize timezone - check if it's a DatetimeIndex first
@@ -122,13 +131,21 @@ class ReturnsCalculator:
                             df.index = df.index.tz_convert('UTC').tz_localize(None)
                         break
             
+            # Show original date range before filtering
+            if show_debug:
+                print(f"  {ticker}: Original data range: {df.index.min().date()} to {df.index.max().date()} ({len(df)} rows)")
+            
             # Filter to date range
+            original_len = len(df)
             if start_date:
                 start_dt = pd.Timestamp(start_date)
                 df = df[df.index >= start_dt]
             if end_date:
                 end_dt = pd.Timestamp(end_date)
                 df = df[df.index <= end_dt]
+            
+            if show_debug and original_len != len(df):
+                print(f"  {ticker}: After filtering: {df.index.min().date()} to {df.index.max().date()} ({len(df)} rows)")
             
             # Calculate returns
             returns = df[price_col].pct_change()
@@ -139,10 +156,21 @@ class ReturnsCalculator:
         
         # Align to common dates
         returns_df = pd.DataFrame(returns_dict)
+        
+        if show_debug:
+            print(f"\nBefore alignment: {len(returns_df)} rows")
+            for ticker in returns_df.columns:
+                ticker_data = returns_df[ticker].dropna()
+                if len(ticker_data) > 0:
+                    print(f"  {ticker}: {ticker_data.index[0].date()} to {ticker_data.index[-1].date()} ({len(ticker_data)} rows)")
+        
         common_dates = returns_df.dropna().index
         
         if len(common_dates) == 0:
             raise ValueError("No overlapping dates found across tickers")
+        
+        if show_debug:
+            print(f"\nAfter alignment (common dates): {common_dates[0].date()} to {common_dates[-1].date()} ({len(common_dates)} rows)")
         
         return returns_df.loc[common_dates]
     
@@ -236,10 +264,13 @@ class PortfolioAnalyzer:
             leverage=self.leverage
         )
     
-    def get_position_info(self) -> List[PositionInfo]:
+    def get_position_info(self, initial_capital: float = 1.0) -> List[PositionInfo]:
         """
         Get detailed information for each position.
         
+        Args:
+            initial_capital: Initial capital for market value calculation
+            
         Returns:
             List of PositionInfo objects
         """
@@ -256,8 +287,8 @@ class PortfolioAnalyzer:
             annualized_return = (1 + total_return) ** (1 / years) - 1
             allocation_pct = (weight / total_weight * 100) if total_weight > 0 else 0
             
-            # Approximate market value (would need actual prices for real value)
-            market_value = weight  # Normalized weight
+            # Calculate market value based on initial capital and weight
+            market_value = weight * initial_capital
             unrealized_pnl = 0  # Would need cost basis for real P&L
             
             positions.append(PositionInfo(
@@ -321,7 +352,8 @@ class PortfolioManager:
         weights: Optional[Dict[str, float]] = None,
         leverage: float = 1.0,
         start_date: Optional[date] = None,
-        end_date: Optional[date] = None
+        end_date: Optional[date] = None,
+        show_data_info: bool = True
     ) -> PortfolioAnalyzer:
         """
         Analyze portfolio with given weights and leverage.
@@ -342,7 +374,8 @@ class PortfolioManager:
         returns_df = ReturnsCalculator.calculate_returns(
             self.data,
             start_date=start_date,
-            end_date=end_date
+            end_date=end_date,
+            show_debug=show_data_info
         )
         
         # Default to equal weights if not provided
@@ -356,6 +389,18 @@ class PortfolioManager:
             leverage=leverage
         )
         
+        # Show data info if requested
+        if show_data_info:
+            print(f"\nData Timeline:")
+            print(f"  Start Date: {returns_df.index[0].date()}")
+            print(f"  End Date: {returns_df.index[-1].date()}")
+            print(f"  Total Days: {len(returns_df)}")
+            print(f"  Tickers: {', '.join(returns_df.columns)}")
+            for ticker in returns_df.columns:
+                ticker_data = returns_df[ticker].dropna()
+                if len(ticker_data) > 0:
+                    print(f"    {ticker}: {ticker_data.index[0].date()} to {ticker_data.index[-1].date()} ({len(ticker_data)} days)")
+        
         return self.analyzer
     
     def get_metrics(self) -> PortfolioMetrics:
@@ -364,11 +409,16 @@ class PortfolioManager:
             raise ValueError("Portfolio not analyzed. Call analyze_portfolio() first.")
         return self.analyzer.calculate_metrics()
     
-    def get_positions(self) -> List[PositionInfo]:
-        """Get position information."""
+    def get_positions(self, initial_capital: float = 1.0) -> List[PositionInfo]:
+        """
+        Get position information.
+        
+        Args:
+            initial_capital: Initial capital for market value calculation
+        """
         if self.analyzer is None:
             raise ValueError("Portfolio not analyzed. Call analyze_portfolio() first.")
-        return self.analyzer.get_position_info()
+        return self.analyzer.get_position_info(initial_capital=initial_capital)
     
     def get_returns_data(self) -> Tuple[pd.Series, Dict[str, pd.Series]]:
         """Get cumulative returns data for visualization."""
